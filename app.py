@@ -1,5 +1,15 @@
 import streamlit as st
 import requests
+
+# Access the key from the TOML file
+api_key = st.secrets["api_credentials"]["live_odds_key"]
+
+# Example usage in a request
+url = f"https://api.the-odds-api.com/v4/sports/?apiKey={api_key}"
+
+st.title("Live Odds Dashboard")
+st.write("API Key successfully loaded from secrets!")import streamlit as st
+import requests
 import json
 import datetime
 
