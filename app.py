@@ -646,17 +646,25 @@ with st.sidebar:
     <hr style="border-color:rgba(46,139,87,0.4);margin:12px 0;">
     """, unsafe_allow_html=True)
 
-    # API Key
+    # API Key — read from Streamlit secrets if available
+    try:
+        secret_key = st.secrets.get("ANTHROPIC_API_KEY", "")
+    except Exception:
+        secret_key = ""
     st.markdown("**🔑 Anthropic API Key**")
-    api_key = st.text_input("", type="password", placeholder="sk-ant-...",
-                             help="Get yours at console.anthropic.com",
-                             key="api_key")
+    if secret_key:
+        st.success("✅ API key loaded from secrets")
+        api_key = secret_key
+    else:
+        api_key = st.text_input("API Key", type="password", placeholder="sk-ant-...",
+                                 help="Get yours at console.anthropic.com",
+                                 key="api_key", label_visibility="collapsed")
 
     st.markdown("<hr style='border-color:rgba(255,255,255,0.08);margin:16px 0;'>", unsafe_allow_html=True)
 
     # Date
     st.markdown("**📅 Match Date**")
-    match_date = st.date_input("", value=datetime.date.today(), key="match_date",
+    match_date = st.date_input("Match Date", value=datetime.date.today(), key="match_date",
                                 label_visibility="collapsed")
 
     st.markdown("<hr style='border-color:rgba(255,255,255,0.08);margin:16px 0;'>", unsafe_allow_html=True)
