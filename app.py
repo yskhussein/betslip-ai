@@ -114,14 +114,20 @@ def af_headers():
 
     st.session_state["af_key_found"] = bool(key)
     st.session_state["af_key_len"] = len(key) if key else 0
+    st.session_state["af_key_preview"] = (key[:8] + "...") if len(key) >= 8 else key
     return {"x-apisports-key": key}
 
 def af_get(endpoint, params):
     """Make a single API-Football request, return response list or []."""
     try:
+        hdrs = af_headers()
+        # Force clean string — remove any whitespace/newlines that could corrupt header
+        key = hdrs.get("x-apisports-key", "")
+        key = "".join(key.split())  # strip ALL whitespace including \n \r \t
+        hdrs = {"x-apisports-key": key}
         r = requests.get(
             f"{AF_BASE}/{endpoint}",
-            headers=af_headers(),
+            headers=hdrs,
             params=params,
             timeout=10
         )
@@ -838,7 +844,7 @@ if generate_btn:
             st.error(f"❌ No fixtures found for {date_str}.")
             if debug_info:
                 st.caption(f"🔍 Debug — {debug_info}")
-            st.caption(f"🗝️ Secret keys: {st.session_state.get('af_secret_keys','?')} | Key found: {st.session_state.get('af_key_found','?')} | Key length: {st.session_state.get('af_key_len','?')} chars")
+            st.caption(f"🗝️ Secret keys: {st.session_state.get('af_secret_keys','?')} | Key found: {st.session_state.get('af_key_found','?')} | Key length: {st.session_state.get('af_key_len','?')} chars | Preview: {st.session_state.get('af_key_preview','?')}")
             st.caption(f"🔐 Key found: {st.session_state.get('af_key_found','?')} | Access attempts: {st.session_state.get('af_attempts','?')}")
             st.info("💡 Share the debug lines above so we can fix the key issue.")
         else:
