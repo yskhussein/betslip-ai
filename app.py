@@ -333,6 +333,12 @@ def get_fixtures_for_date(target_date, leagues):
     if fixtures:
         # Merge probabilities from embedded into live ESPN data
         for fix in fixtures:
+            # Ensure state fields always exist
+            fix.setdefault("state", "pre")
+            fix.setdefault("completed", False)
+            fix.setdefault("home_score", "")
+            fix.setdefault("away_score", "")
+            fix.setdefault("status_label", "")
             for emb in embedded.get(next((k for k,v in LABEL_MAP.items() if v==fix["league"]),""), []):
                 if fix["home"] in emb["home"] or emb["home"] in fix["home"]:
                     fix["homeWinPct"] = emb["homeWinPct"]
@@ -341,9 +347,16 @@ def get_fixtures_for_date(target_date, leagues):
                     break
         return fixtures
 
-    # Fallback to embedded data
+    # Fallback to embedded data — add state field so display works
     for lid in leagues:
-        fixtures += embedded.get(lid, [])
+        for fix in embedded.get(lid, []):
+            fix_copy = dict(fix)
+            fix_copy.setdefault("state", "pre")
+            fix_copy.setdefault("completed", False)
+            fix_copy.setdefault("home_score", "")
+            fix_copy.setdefault("away_score", "")
+            fix_copy.setdefault("status_label", "")
+            fixtures.append(fix_copy)
 
     return fixtures
 
@@ -903,11 +916,12 @@ with tab_slips:
             </div>
         </div>""", unsafe_allow_html=True)
 
-        if slips:
-            labels = [f"{SLIP_TYPES.get(s.get('type',''),('🎰',))[0]} {s.get('title','')[:16]}" for s in slips]
-            labels.append("📋 Fixtures")
-            tabs = st.tabs(labels)
+        # Always show fixtures tab — even if no slips generated
+        labels = [f"{SLIP_TYPES.get(s.get('type',''),('🎰',))[0]} {s.get('title','')[:16]}" for s in slips]
+        labels.append("📋 Fixtures")
+        tabs = st.tabs(labels)
 
+        if slips:
             for i, (tab, slip) in enumerate(zip(tabs[:-1], slips)):
                 with tab:
                     stype  = slip.get("type","")
@@ -1047,7 +1061,7 @@ with tab_slips:
                         save_bets_to_disk(st.session_state.saved_bets)
                         st.success(f"✅ Saved! Stake €{stake} · {value_flag} · See Bet Tracker tab")
 
-            with tabs[-1]:
+        with tabs[-1]:
                 st.markdown("#### 📋 All Fixtures")
                 # Sort: live first, then pre, then post
                 def _sort_key(f):
