@@ -77,38 +77,43 @@ AF_BASE = "https://v3.football.api-sports.io"
 
 def af_headers():
     """Return API-Football auth headers."""
-    # Always dump secret keys for debug
-    try:
-        st.session_state["af_secret_keys"] = str(list(st.secrets.keys()))
-    except Exception as e:
-        st.session_state["af_secret_keys"] = f"error: {e}"
-
-    # 1. Manual input in sidebar takes priority
+    # Priority 1: manual key entered in sidebar
     key = st.session_state.get("af_key_override", "")
 
-    # 2. Try every possible secrets access pattern
+    # Priority 2: try all secrets patterns
     if not key:
-        attempts = {}
+        secret_keys = []
+        try:
+            secret_keys = list(st.secrets.keys())
+            st.session_state["af_secret_keys"] = str(secret_keys)
+        except Exception as e:
+            st.session_state["af_secret_keys"] = f"secrets error: {e}"
+
         for name in ["API_FOOTBALL_KEY","api_football_key","API_FOOTBALL","APIFOOTBALL_KEY"]:
             try:
                 v = st.secrets[name]
-                if v: key = v; break
-            except Exception as e:
-                attempts[name] = str(e)
-        st.session_state["af_attempts"] = str(attempts)
+                if v:
+                    key = str(v).strip()
+                    break
+            except Exception:
+                pass
 
-    # 3. Try nested sections
-    if not key:
-        for section in ["general","keys","api","football","default"]:
-            for name in ["API_FOOTBALL_KEY","api_football_key","API_FOOTBALL"]:
-                try:
-                    v = st.secrets[section][name]
-                    if v: key = v; break
-                except Exception:
-                    pass
-            if key: break
+        # Try nested sections
+        if not key:
+            for section in secret_keys:
+                for name in ["API_FOOTBALL_KEY","api_football_key","API_FOOTBALL"]:
+                    try:
+                        v = st.secrets[section][name]
+                        if v:
+                            key = str(v).strip()
+                            break
+                    except Exception:
+                        pass
+                if key:
+                    break
 
     st.session_state["af_key_found"] = bool(key)
+    st.session_state["af_key_len"] = len(key) if key else 0
     return {"x-apisports-key": key}
 
 def af_get(endpoint, params):
@@ -833,7 +838,7 @@ if generate_btn:
             st.error(f"❌ No fixtures found for {date_str}.")
             if debug_info:
                 st.caption(f"🔍 Debug — {debug_info}")
-            st.caption(f"🗝️ Secret keys: {st.session_state.get('af_secret_keys','?')}")
+            st.caption(f"🗝️ Secret keys: {st.session_state.get('af_secret_keys','?')} | Key found: {st.session_state.get('af_key_found','?')} | Key length: {st.session_state.get('af_key_len','?')} chars")
             st.caption(f"🔐 Key found: {st.session_state.get('af_key_found','?')} | Access attempts: {st.session_state.get('af_attempts','?')}")
             st.info("💡 Share the debug lines above so we can fix the key issue.")
         else:
