@@ -64,299 +64,173 @@ SLIP_ACCENTS = {
     "mixed":"#2e8b57","bonus":"#c8960c","insane":"#c0392b",
 }
 
-# ── Sports API fixture fetcher ─────────────────────────────────────────────────
-SPORTRADAR_LEAGUES = ["bundesliga","la_liga","serie_a","ligue_1","epl","champions_league"]
 FLAG_MAP   = {"bundesliga":"🇩🇪","la_liga":"🇪🇸","serie_a":"🇮🇹","ligue_1":"🇫🇷","epl":"🏴","champions_league":"🏆","eredivisie":"🇳🇱"}
 LABEL_MAP  = {"bundesliga":"Bundesliga","la_liga":"La Liga","serie_a":"Serie A","ligue_1":"Ligue 1","epl":"Premier League","champions_league":"Champions League","eredivisie":"Eredivisie"}
 
-def fetch_fixtures_for_date(target_date, leagues):
-    """Call the SportRadar API (same source as Claude's sports tool) and return scheduled fixtures."""
-    date_iso   = target_date.strftime("%Y-%m-%d")
-    all_fixtures = []
-
-    for lid in leagues:
-        if lid not in SPORTRADAR_LEAGUES:
-            continue
-        try:
-            # SportRadar public API used by Claude tools
-            url = f"https://api.sportradar.us/soccer/trial/v4/en/schedules/{date_iso}/results.json"
-            # We use the same internal endpoint structure
-            r = requests.get(
-                f"https://api.sportsdata-proxy.streamlit.app/v1/scores/{lid}",
-                timeout=6
-            )
-        except:
-            pass
-
-        # Use the documented public endpoint for this integration
-        try:
-            r = requests.get(
-                f"https://site.api.espn.com/apis/site/v2/sports/soccer/"
-                f"{'ger.1' if lid=='bundesliga' else 'esp.1' if lid=='la_liga' else 'ita.1' if lid=='serie_a' else 'fra.1' if lid=='ligue_1' else 'eng.1' if lid=='epl' else 'uefa.champions'}"
-                f"/scoreboard?dates={date_iso.replace('-','')}",
-                timeout=8
-            )
-            if r.status_code == 200:
-                data = r.json()
-                for event in data.get("events", []):
-                    comps = event.get("competitions", [{}])[0]
-                    competitors = comps.get("competitors", [])
-                    if len(competitors) < 2:
-                        continue
-                    home = next((c for c in competitors if c.get("homeAway") == "home"), competitors[0])
-                    away = next((c for c in competitors if c.get("homeAway") == "away"), competitors[1])
-                    home_name = home.get("team", {}).get("displayName", "?")
-                    away_name = away.get("team", {}).get("displayName", "?")
-                    # Get probabilities
-                    home_pct, away_pct = 50, 50
-                    odds = comps.get("odds", [{}])[0] if comps.get("odds") else {}
-                    # time
-                    start = event.get("date","")
-                    time_str = start[11:16] if len(start) > 15 else "TBC"
-                    # best bet
-                    best = f"{home_name} WIN" if home_pct >= away_pct else f"{away_name} WIN"
-                    all_fixtures.append({
-                        "time": time_str,
-                        "league": LABEL_MAP[lid],
-                        "flag": FLAG_MAP[lid],
-                        "home": home_name,
-                        "away": away_name,
-                        "homeWinPct": home_pct,
-                        "awayWinPct": away_pct,
-                        "bestBet": best,
-                    })
-        except:
-            pass
-
-    return all_fixtures
-
-
-def get_sportradar_fixtures(target_date, leagues):
-    """
-    Primary method: mirrors Claude's own fetch_sports_data tool by calling
-    the SportRadar proxy used within Streamlit Cloud.
-    Returns list of fixture dicts with real win probabilities.
-    """
-    date_iso = target_date.strftime("%Y-%m-%d")
-    fixtures = []
-
-    for lid in leagues:
-        if lid not in SPORTRADAR_LEAGUES:
-            continue
-        try:
-            # This mirrors the internal API endpoint Claude's tools use
-            r = requests.get(
-                f"https://sr-api-proxy.streamlit.app/scores/{lid}",
-                timeout=8,
-                headers={"Accept": "application/json"}
-            )
-            if r.status_code == 200:
-                games = r.json().get("data", {}).get("games", [])
-                for g in games:
-                    if g.get("status") != "scheduled":
-                        continue
-                    start = g.get("start_time", "")
-                    if not start.startswith(date_iso):
-                        continue
-                    teams = g.get("teams", {})
-                    keys  = list(teams.keys())
-                    if len(keys) < 2:
-                        continue
-                    home_abbr, away_abbr = keys[0], keys[1]
-                    home_name = teams[home_abbr]["name"]
-                    away_name = teams[away_abbr]["name"]
-                    wp = g.get("win_probability", {})
-                    hp = round(wp.get(home_abbr, 50))
-                    ap = round(wp.get(away_abbr, 50))
-                    best = f"{home_name} WIN" if hp >= ap else f"{away_name} WIN"
-                    fixtures.append({
-                        "time":       start[11:16],
-                        "league":     LABEL_MAP[lid],
-                        "flag":       FLAG_MAP[lid],
-                        "home":       home_name,
-                        "away":       away_name,
-                        "homeWinPct": hp,
-                        "awayWinPct": ap,
-                        "bestBet":    best,
-                    })
-        except:
-            pass
-
-    return fixtures
-
-
-# ── Real fixture data (fetched from SportRadar API, March 7-8 2026) ────────────
-# This is updated from the live API — these are REAL scheduled matches.
-REAL_FIXTURES = {
-    "2026-03-07": {
-        "bundesliga": [
-            {"time":"14:30","league":"Bundesliga","flag":"🇩🇪","home":"SC Freiburg","away":"Bayer Leverkusen","homeWinPct":33,"awayWinPct":39,"bestBet":"Bayer Leverkusen WIN"},
-            {"time":"14:30","league":"Bundesliga","flag":"🇩🇪","home":"FSV Mainz","away":"VfB Stuttgart","homeWinPct":30,"awayWinPct":45,"bestBet":"VfB Stuttgart WIN"},
-            {"time":"14:30","league":"Bundesliga","flag":"🇩🇪","home":"RB Leipzig","away":"FC Augsburg","homeWinPct":67,"awayWinPct":15,"bestBet":"RB Leipzig WIN"},
-            {"time":"14:30","league":"Bundesliga","flag":"🇩🇪","home":"VFL Wolfsburg","away":"Hamburger SV","homeWinPct":40,"awayWinPct":33,"bestBet":"VFL Wolfsburg WIN"},
-            {"time":"14:30","league":"Bundesliga","flag":"🇩🇪","home":"1. FC Heidenheim","away":"TSG Hoffenheim","homeWinPct":19,"awayWinPct":60,"bestBet":"TSG Hoffenheim WIN"},
-            {"time":"17:30","league":"Bundesliga","flag":"🇩🇪","home":"1. FC Cologne","away":"Borussia Dortmund","homeWinPct":23,"awayWinPct":54,"bestBet":"Borussia Dortmund WIN"},
-        ],
-        "la_liga": [
-            {"time":"13:00","league":"La Liga","flag":"🇪🇸","home":"CA Osasuna","away":"RCD Mallorca","homeWinPct":54,"awayWinPct":19,"bestBet":"CA Osasuna WIN"},
-            {"time":"15:15","league":"La Liga","flag":"🇪🇸","home":"Levante UD","away":"Girona FC","homeWinPct":33,"awayWinPct":38,"bestBet":"Girona FC WIN"},
-            {"time":"17:30","league":"La Liga","flag":"🇪🇸","home":"Atletico Madrid","away":"Real Sociedad","homeWinPct":59,"awayWinPct":18,"bestBet":"Atletico Madrid WIN"},
-            {"time":"20:00","league":"La Liga","flag":"🇪🇸","home":"Athletic Bilbao","away":"FC Barcelona","homeWinPct":20,"awayWinPct":58,"bestBet":"FC Barcelona WIN"},
-        ],
-        "serie_a": [
-            {"time":"14:00","league":"Serie A","flag":"🇮🇹","home":"Cagliari Calcio","away":"Como 1907","homeWinPct":17,"awayWinPct":60,"bestBet":"Como 1907 WIN"},
-            {"time":"17:00","league":"Serie A","flag":"🇮🇹","home":"Atalanta BC","away":"Udinese Calcio","homeWinPct":57,"awayWinPct":18,"bestBet":"Atalanta BC WIN"},
-            {"time":"19:45","league":"Serie A","flag":"🇮🇹","home":"Juventus Turin","away":"Pisa SC","homeWinPct":78,"awayWinPct":8,"bestBet":"Juventus Turin WIN"},
-        ],
-        "ligue_1": [
-            {"time":"16:00","league":"Ligue 1","flag":"🇫🇷","home":"FC Nantes","away":"Angers SCO","homeWinPct":43,"awayWinPct":27,"bestBet":"FC Nantes WIN"},
-            {"time":"18:00","league":"Ligue 1","flag":"🇫🇷","home":"AJ Auxerre","away":"Strasbourg Alsace","homeWinPct":27,"awayWinPct":45,"bestBet":"Strasbourg WIN"},
-            {"time":"20:05","league":"Ligue 1","flag":"🇫🇷","home":"Toulouse FC","away":"Olympique Marseille","homeWinPct":32,"awayWinPct":41,"bestBet":"Olympique Marseille WIN"},
-        ],
-        "epl": [],
-        "champions_league": [],
-        "eredivisie": [
-            {"time":"12:15","league":"Eredivisie","flag":"🇳🇱","home":"Sparta Rotterdam","away":"PEC Zwolle","homeWinPct":55,"awayWinPct":20,"bestBet":"Sparta Rotterdam WIN"},
-            {"time":"14:30","league":"Eredivisie","flag":"🇳🇱","home":"Go Ahead Eagles","away":"FC Twente","homeWinPct":28,"awayWinPct":48,"bestBet":"FC Twente WIN"},
-            {"time":"14:30","league":"Eredivisie","flag":"🇳🇱","home":"Fortuna Sittard","away":"Telstar","homeWinPct":68,"awayWinPct":14,"bestBet":"Fortuna Sittard WIN"},
-            {"time":"16:45","league":"Eredivisie","flag":"🇳🇱","home":"NAC Breda","away":"Feyenoord","homeWinPct":15,"awayWinPct":72,"bestBet":"Feyenoord WIN"},
-            {"time":"16:45","league":"Eredivisie","flag":"🇳🇱","home":"NEC Nijmegen","away":"Volendam","homeWinPct":65,"awayWinPct":16,"bestBet":"NEC Nijmegen WIN"},
-        ],
-    },
-    "2026-03-08": {
-        "bundesliga": [
-            {"time":"14:30","league":"Bundesliga","flag":"🇩🇪","home":"FC St. Pauli","away":"Eintracht Frankfurt","homeWinPct":35,"awayWinPct":37,"bestBet":"Eintracht Frankfurt WIN"},
-            {"time":"16:30","league":"Bundesliga","flag":"🇩🇪","home":"Union Berlin","away":"Werder Bremen","homeWinPct":42,"awayWinPct":30,"bestBet":"Union Berlin WIN"},
-        ],
-        "la_liga": [
-            {"time":"13:00","league":"La Liga","flag":"🇪🇸","home":"Villarreal CF","away":"Elche CF","homeWinPct":65,"awayWinPct":16,"bestBet":"Villarreal CF WIN"},
-            {"time":"15:15","league":"La Liga","flag":"🇪🇸","home":"Getafe CF","away":"Real Betis","homeWinPct":33,"awayWinPct":34,"bestBet":"Real Betis WIN"},
-            {"time":"17:30","league":"La Liga","flag":"🇪🇸","home":"Sevilla FC","away":"Rayo Vallecano","homeWinPct":38,"awayWinPct":32,"bestBet":"Sevilla FC WIN"},
-            {"time":"20:00","league":"La Liga","flag":"🇪🇸","home":"Valencia CF","away":"Deportivo Alaves","homeWinPct":46,"awayWinPct":24,"bestBet":"Valencia CF WIN"},
-        ],
-        "serie_a": [
-            {"time":"11:30","league":"Serie A","flag":"🇮🇹","home":"US Lecce","away":"US Cremonese","homeWinPct":45,"awayWinPct":24,"bestBet":"US Lecce WIN"},
-            {"time":"14:00","league":"Serie A","flag":"🇮🇹","home":"Bologna FC","away":"Hellas Verona","homeWinPct":61,"awayWinPct":15,"bestBet":"Bologna FC WIN"},
-            {"time":"14:00","league":"Serie A","flag":"🇮🇹","home":"ACF Fiorentina","away":"Parma Calcio","homeWinPct":56,"awayWinPct":19,"bestBet":"ACF Fiorentina WIN"},
-            {"time":"17:00","league":"Serie A","flag":"🇮🇹","home":"Genoa CFC","away":"AS Roma","homeWinPct":22,"awayWinPct":50,"bestBet":"AS Roma WIN"},
-            {"time":"19:45","league":"Serie A","flag":"🇮🇹","home":"AC Milan","away":"Inter Milano","homeWinPct":27,"awayWinPct":43,"bestBet":"Inter Milano WIN"},
-        ],
-        "ligue_1": [
-            {"time":"14:00","league":"Ligue 1","flag":"🇫🇷","home":"Racing Club De Lens","away":"FC Metz","homeWinPct":76,"awayWinPct":9,"bestBet":"Racing Club De Lens WIN"},
-            {"time":"16:15","league":"Ligue 1","flag":"🇫🇷","home":"Stade Brest 29","away":"Le Havre AC","homeWinPct":50,"awayWinPct":23,"bestBet":"Stade Brest 29 WIN"},
-            {"time":"16:15","league":"Ligue 1","flag":"🇫🇷","home":"OGC Nice","away":"Stade Rennais","homeWinPct":33,"awayWinPct":40,"bestBet":"Stade Rennais WIN"},
-            {"time":"16:15","league":"Ligue 1","flag":"🇫🇷","home":"Lille OSC","away":"FC Lorient","homeWinPct":61,"awayWinPct":16,"bestBet":"Lille OSC WIN"},
-            {"time":"19:45","league":"Ligue 1","flag":"🇫🇷","home":"Olympique Lyon","away":"Paris FC","homeWinPct":57,"awayWinPct":19,"bestBet":"Olympique Lyon WIN"},
-        ],
-        "epl": [],
-        "champions_league": [],
-        "eredivisie": [
-            {"time":"14:30","league":"Eredivisie","flag":"🇳🇱","home":"Ajax","away":"RKC Waalwijk","homeWinPct":75,"awayWinPct":11,"bestBet":"Ajax WIN"},
-            {"time":"14:30","league":"Eredivisie","flag":"🇳🇱","home":"FC Utrecht","away":"AZ Alkmaar","homeWinPct":32,"awayWinPct":42,"bestBet":"AZ Alkmaar WIN"},
-            {"time":"16:45","league":"Eredivisie","flag":"🇳🇱","home":"PSV Eindhoven","away":"Heerenveen","homeWinPct":80,"awayWinPct":8,"bestBet":"PSV Eindhoven WIN"},
-        ],
-    },
+# ── API-Football league IDs ───────────────────────────────────────────────────
+AF_LEAGUE_IDS = {
+    "bundesliga": 78, "la_liga": 140, "serie_a": 135,
+    "ligue_1": 61,   "epl": 39,       "champions_league": 2,
+    "eredivisie": 88,
 }
+AF_BASE = "https://v3.football.api-sports.io"
 
+def af_headers():
+    """Return API-Football auth headers from Streamlit secrets."""
+    try:
+        key = st.secrets.get("API_FOOTBALL_KEY", "")
+    except:
+        key = ""
+    return {"x-apisports-key": key}
 
+def af_get(endpoint, params):
+    """Make a single API-Football request, return response list or []."""
+    try:
+        r = requests.get(
+            f"{AF_BASE}/{endpoint}",
+            headers=af_headers(),
+            params=params,
+            timeout=10
+        )
+        if r.status_code == 200:
+            data = r.json()
+            # Surface API-level errors (e.g. invalid key, quota exceeded)
+            errors = data.get("errors", {})
+            if errors:
+                st.session_state["af_error"] = str(errors)
+            return data.get("response", [])
+    except Exception as e:
+        st.session_state["af_error"] = str(e)
+    return []
+
+@st.cache_data(ttl=300, show_spinner=False)   # cache 5 min per date+leagues combo
 def get_fixtures_for_date(target_date, leagues):
-    """Return real fixtures. Uses live ESPN API first, falls back to embedded data."""
+    """
+    Fetch real fixtures from API-Football for the given date and leagues.
+    Strategy:
+      1. One request per league to /fixtures (date + league + season)
+      2. Batch all upcoming fixture IDs and fetch /predictions in one call each
+         (API-Football predictions endpoint only accepts one fixture at a time,
+          so we fetch in parallel-ish with a short sleep to respect rate limits)
+    """
+    import time as _time
+
     date_iso = target_date.strftime("%Y-%m-%d")
-    ESPN_LEAGUE_MAP = {
-        "bundesliga": "ger.1", "la_liga": "esp.1", "serie_a": "ita.1",
-        "ligue_1": "fra.1",   "epl": "eng.1",      "champions_league": "uefa.champions",
-        "eredivisie": "ned.1",
-    }
-    fixtures = []
+    # Season: Aug-Dec = current year, Jan-Jul = previous year
+    season   = target_date.year if target_date.month >= 7 else target_date.year - 1
 
+    FINISHED = {"FT","AET","PEN","AWD","WO"}
+    LIVE     = {"1H","HT","2H","ET","BT","P"}
+
+    # ── Step 1: fetch fixtures for all leagues ──────────────────────────────
+    raw_fixtures = []   # list of (lid, fix_dict)
     for lid in leagues:
-        if lid not in ESPN_LEAGUE_MAP:
+        league_id = AF_LEAGUE_IDS.get(lid)
+        if not league_id:
             continue
+        data = af_get("fixtures", {
+            "league": league_id,
+            "season": season,
+            "date":   date_iso,
+        })
+        for fix in data:
+            raw_fixtures.append((lid, fix))
+
+    if not raw_fixtures:
+        return []
+
+    # ── Step 2: fetch predictions for upcoming fixtures only ────────────────
+    # Build list of fixture IDs that are not yet started
+    pre_ids = []
+    for lid, fix in raw_fixtures:
+        f      = fix.get("fixture", {})
+        short  = f.get("status", {}).get("short", "NS")
+        fid    = f.get("id")
+        if short not in FINISHED and short not in LIVE and fid:
+            pre_ids.append(fid)
+
+    # Fetch predictions (1 call per fixture — API limitation)
+    predictions = {}   # fixture_id -> (home_pct, away_pct, draw_pct)
+    for fid in pre_ids:
         try:
-            slug = ESPN_LEAGUE_MAP[lid]
-            r = requests.get(
-                f"https://site.api.espn.com/apis/site/v2/sports/soccer/{slug}/scoreboard"
-                f"?dates={date_iso.replace('-','')}",
-                timeout=6, headers={"Accept": "application/json"}
-            )
-            if r.status_code == 200:
-                events = r.json().get("events", [])
-                for ev in events:
-                    comp = ev.get("competitions", [{}])[0]
-                    status      = comp.get("status", {})
-                    status_type = status.get("type", {})
-                    state       = status_type.get("state", "pre")      # pre / in / post
-                    completed   = status_type.get("completed", False)
-                    clock       = status.get("displayClock", "")
-                    period      = status.get("period", 0)
-
-                    competitors = comp.get("competitors", [])
-                    if len(competitors) < 2:
-                        continue
-                    home = next((c for c in competitors if c.get("homeAway") == "home"), competitors[0])
-                    away = next((c for c in competitors if c.get("homeAway") == "away"), competitors[1])
-                    home_name  = home.get("team", {}).get("displayName", "?")
-                    away_name  = away.get("team", {}).get("displayName", "?")
-                    home_score = home.get("score", "") if state in ("in", "post") else ""
-                    away_score = away.get("score", "") if state in ("in", "post") else ""
-                    start      = ev.get("date", "")
-                    time_str   = start[11:16] if len(start) > 15 else "TBC"
-
-                    # Status label for display
-                    if completed or state == "post":
-                        status_label = "FT"
-                    elif state == "in":
-                        status_label = f"🔴 {clock}" if clock else "🔴 LIVE"
-                    else:
-                        status_label = ""
-
-                    fixtures.append({
-                        "time":        time_str,
-                        "league":      LABEL_MAP[lid],
-                        "flag":        FLAG_MAP[lid],
-                        "home":        home_name,
-                        "away":        away_name,
-                        "homeWinPct":  50,
-                        "awayWinPct":  50,
-                        "bestBet":     f"{home_name} or Away",
-                        "state":       state,
-                        "completed":   completed,
-                        "home_score":  home_score,
-                        "away_score":  away_score,
-                        "status_label": status_label,
-                    })
+            pdata = af_get("predictions", {"fixture": fid})
+            if pdata:
+                pct  = pdata[0].get("predictions", {}).get("percent", {})
+                def _p(key, fallback=0):
+                    v = pct.get(key, f"{fallback}%")
+                    try: return int(str(v).replace("%","").strip())
+                    except: return fallback
+                predictions[fid] = (_p("home",50), _p("away",50), _p("draws",0))
         except:
             pass
+        _time.sleep(0.15)   # ~6-7 req/sec — well within free tier 10/min limit
 
-    # Enrich with real probabilities from embedded data where available
-    embedded = REAL_FIXTURES.get(date_iso, {})
-    if fixtures:
-        # Merge probabilities from embedded into live ESPN data
-        for fix in fixtures:
-            # Ensure state fields always exist
-            fix.setdefault("state", "pre")
-            fix.setdefault("completed", False)
-            fix.setdefault("home_score", "")
-            fix.setdefault("away_score", "")
-            fix.setdefault("status_label", "")
-            for emb in embedded.get(next((k for k,v in LABEL_MAP.items() if v==fix["league"]),""), []):
-                if fix["home"] in emb["home"] or emb["home"] in fix["home"]:
-                    fix["homeWinPct"] = emb["homeWinPct"]
-                    fix["awayWinPct"] = emb["awayWinPct"]
-                    fix["bestBet"]    = emb["bestBet"]
-                    break
-        return fixtures
+    # ── Step 3: assemble final fixture list ────────────────────────────────
+    fixtures = []
+    for lid, fix in raw_fixtures:
+        f       = fix.get("fixture", {})
+        teams   = fix.get("teams", {})
+        goals   = fix.get("goals", {})
+        league_fix = fix.get("league", {})
+        status  = f.get("status", {})
+        short   = status.get("short", "NS")
+        elapsed = status.get("elapsed")
 
-    # Fallback to embedded data — add state field so display works
-    for lid in leagues:
-        for fix in embedded.get(lid, []):
-            fix_copy = dict(fix)
-            fix_copy.setdefault("state", "pre")
-            fix_copy.setdefault("completed", False)
-            fix_copy.setdefault("home_score", "")
-            fix_copy.setdefault("away_score", "")
-            fix_copy.setdefault("status_label", "")
-            fixtures.append(fix_copy)
+        home_name  = teams.get("home", {}).get("name", "?")
+        away_name  = teams.get("away", {}).get("name", "?")
+        fixture_id = f.get("id")
+
+        if short in FINISHED:
+            state = "post"; completed = True
+        elif short in LIVE:
+            state = "in";   completed = False
+        else:
+            state = "pre";  completed = False
+
+        home_score = goals.get("home")
+        away_score = goals.get("away")
+        hs  = str(home_score) if home_score is not None and state != "pre" else ""
+        as_ = str(away_score) if away_score is not None and state != "pre" else ""
+
+        if state == "post":
+            status_label = "FT"
+        elif state == "in":
+            status_label = f"🔴 {elapsed}'" if elapsed else "🔴 LIVE"
+        else:
+            status_label = ""
+
+        date_str = f.get("date", "")
+        time_str = date_str[11:16] if len(date_str) > 15 else "TBC"
+
+        if state == "pre" and fixture_id in predictions:
+            home_pct, away_pct, draw_pct = predictions[fixture_id]
+        else:
+            home_pct, away_pct, draw_pct = 50, 50, 0
+
+        if home_pct > away_pct:
+            best_bet = f"{home_name} WIN"
+        elif away_pct > home_pct:
+            best_bet = f"{away_name} WIN"
+        else:
+            best_bet = "Draw possible"
+
+        fixtures.append({
+            "fixture_id":   fixture_id,
+            "time":         time_str,
+            "league":       LABEL_MAP.get(lid, lid),
+            "flag":         FLAG_MAP.get(lid, "🏆"),
+            "home":         home_name,
+            "away":         away_name,
+            "homeWinPct":   home_pct,
+            "awayWinPct":   away_pct,
+            "drawPct":      draw_pct,
+            "bestBet":      best_bet,
+            "state":        state,
+            "completed":    completed,
+            "home_score":   hs,
+            "away_score":   as_,
+            "status_label": status_label,
+        })
 
     return fixtures
 
@@ -550,48 +424,40 @@ def save_bets_to_disk(bets):
         pass
 
 # ── Auto result checker ────────────────────────────────────────────────────────
-ESPN_SLUGS = {
-    "Bundesliga":"ger.1","La Liga":"esp.1","Serie A":"ita.1",
-    "Ligue 1":"fra.1","Premier League":"eng.1",
-    "Champions League":"uefa.champions","Eredivisie":"ned.1",
-}
-
 def fetch_completed_scores(date_str):
     """
-    Fetch all completed match scores from ESPN for a given date.
+    Fetch all completed match scores from API-Football for a given date.
     date_str format: 'Saturday 07 March 2026'
-    Returns dict: {'team a vs team b': (home_score, away_score), ...}
+    Returns dict: {'home_name|away_name': (home_score, away_score, home_name, away_name)}
     """
     try:
         dt = datetime.datetime.strptime(date_str, "%A %d %B %Y")
     except:
         return {}
-    date_iso = dt.strftime("%Y%m%d")
-    scores = {}
-    for slug in ESPN_SLUGS.values():
+    date_iso = dt.strftime("%Y-%m-%d")
+    season   = dt.year if dt.month >= 7 else dt.year - 1
+    scores   = {}
+    finished = {"FT", "AET", "PEN", "AWD", "WO"}
+
+    for league_id in AF_LEAGUE_IDS.values():
         try:
-            r = requests.get(
-                f"https://site.api.espn.com/apis/site/v2/sports/soccer/{slug}/scoreboard?dates={date_iso}",
-                timeout=6, headers={"Accept":"application/json"}
-            )
-            if r.status_code != 200:
-                continue
-            for ev in r.json().get("events", []):
-                comp = ev.get("competitions",[{}])[0]
-                status_type = comp.get("status",{}).get("type",{})
-                if not status_type.get("completed", False):
-                    continue  # skip matches not finished
-                competitors = comp.get("competitors",[])
-                if len(competitors) < 2:
+            data = af_get("fixtures", {
+                "league": league_id,
+                "season": season,
+                "date":   date_iso,
+            })
+            for fix in data:
+                short = fix.get("fixture", {}).get("status", {}).get("short", "")
+                if short not in finished:
                     continue
-                home = next((c for c in competitors if c.get("homeAway")=="home"), competitors[0])
-                away = next((c for c in competitors if c.get("homeAway")=="away"), competitors[1])
-                home_name  = home.get("team",{}).get("displayName","").lower()
-                away_name  = away.get("team",{}).get("displayName","").lower()
-                home_score = int(home.get("score", 0))
-                away_score = int(away.get("score", 0))
-                key = f"{home_name}|{away_name}"
-                scores[key] = (home_score, away_score, home.get("team",{}).get("displayName",""), away.get("team",{}).get("displayName",""))
+                teams = fix.get("teams", {})
+                goals = fix.get("goals", {})
+                home_name  = teams.get("home", {}).get("name", "")
+                away_name  = teams.get("away", {}).get("name", "")
+                home_score = int(goals.get("home") or 0)
+                away_score = int(goals.get("away") or 0)
+                key = f"{home_name.lower()}|{away_name.lower()}"
+                scores[key] = (home_score, away_score, home_name, away_name)
         except:
             continue
     return scores
@@ -833,6 +699,16 @@ with st.sidebar:
         st.session_state["auto_date"] = next_sat
         st.rerun()
     st.markdown("<hr style='border-color:rgba(255,255,255,0.08);'>", unsafe_allow_html=True)
+    # Show API-Football error if any
+    af_err = st.session_state.get("af_error", "")
+    if af_err:
+        st.markdown(
+            f"<div style='background:rgba(255,60,60,0.1);border:1px solid rgba(255,60,60,0.3);"
+            f"border-radius:8px;padding:7px 10px;margin-bottom:8px;font-size:0.75rem;color:#ff6b6b;'>"
+            f"⚠️ API: {af_err[:100]}</div>",
+            unsafe_allow_html=True
+        )
+
     generate_btn = st.button("🤖 GENERATE SLIPS")
     st.markdown("""<div style="margin-top:12px;padding:8px;background:rgba(192,57,43,0.15);
         border:1px solid rgba(192,57,43,0.3);border-radius:8px;font-size:0.72rem;color:#ff8a7a;text-align:center;">
@@ -889,7 +765,7 @@ if generate_btn:
             }
 
 # ── MAIN TABS ─────────────────────────────────────────────────────────────────
-tab_slips, tab_chat, tab_tracker = st.tabs(["🎰 Slips", "💬 Match Chat", "📊 Bet Tracker"])
+tab_slips, tab_fixtures, tab_chat, tab_tracker = st.tabs(["🎰 Slips", "📋 Fixtures", "💬 Match Chat", "📊 Bet Tracker"])
 
 # ════════════════════════ TAB 1 — SLIPS ══════════════════════════════════════
 with tab_slips:
@@ -1104,7 +980,77 @@ with tab_slips:
                         </div>
                     </div>""", unsafe_allow_html=True)
 
-# ════════════════════════ TAB 2 — MATCH CHAT ════════════════════════════════
+# ════════════════════════ TAB 2 — FIXTURES ══════════════════════════════════
+with tab_fixtures:
+    st.markdown("""
+    <div style="font-family:'Bebas Neue',sans-serif;font-size:1.8rem;letter-spacing:2px;
+                margin-bottom:4px;color:#f5a623;">📋 FIXTURES</div>
+    <div style="color:#7a8fa6;font-size:0.86rem;margin-bottom:16px;">
+        Live scores, upcoming matches and results for the selected date.
+    </div>""", unsafe_allow_html=True)
+
+    # Use fixtures from session if available, otherwise fetch fresh
+    fix_date = match_date
+    if st.session_state.result and st.session_state.result.get("fixtures"):
+        all_fix = st.session_state.result["fixtures"]
+        fix_label = st.session_state.result.get("date", fix_date.strftime("%A %d %B %Y"))
+    else:
+        with st.spinner("📡 Loading fixtures..."):
+            all_fix = get_fixtures_for_date(fix_date, list(LEAGUES.keys()))
+        fix_label = fix_date.strftime("%A %d %B %Y")
+
+    if not all_fix:
+        st.markdown("""
+        <div style="text-align:center;padding:40px 20px;">
+            <div style="font-size:3rem;">📅</div>
+            <div style="font-family:'Bebas Neue',sans-serif;font-size:1.2rem;letter-spacing:2px;color:#3d5a40;margin-top:8px;">NO FIXTURES FOUND</div>
+            <div style="color:#7a8fa6;font-size:0.86rem;margin-top:6px;">Try selecting a different date or generate slips first.</div>
+        </div>""", unsafe_allow_html=True)
+    else:
+        st.markdown(f"<div style='color:#7a8fa6;font-size:0.84rem;margin-bottom:10px;'>📅 {fix_label} · {len(all_fix)} matches</div>", unsafe_allow_html=True)
+
+        def _sort_key(f):
+            s = f.get("state","pre")
+            return 0 if s=="in" else (1 if s=="pre" else 2)
+
+        for f in sorted(all_fix, key=_sort_key):
+            state     = f.get("state","pre")
+            completed = f.get("completed", False)
+            hs        = f.get("home_score","")
+            as_       = f.get("away_score","")
+            sl        = f.get("status_label","")
+
+            if completed or state == "post":
+                bg         = "rgba(255,255,255,0.02)"
+                border     = "1px solid rgba(255,255,255,0.04)"
+                time_color = "#555"
+                score_html = f"<div style='font-family:monospace;font-size:1rem;font-weight:800;color:#7a8fa6;text-align:center;min-width:64px;'>{hs} – {as_}<br><span style='font-size:0.65rem;color:#555;'>FT</span></div>"
+            elif state == "in":
+                bg         = "rgba(255,60,60,0.06)"
+                border     = "1px solid rgba(255,60,60,0.25)"
+                time_color = "#ff6b6b"
+                score_html = f"<div style='font-family:monospace;font-size:1rem;font-weight:800;color:#ff6b6b;text-align:center;min-width:64px;'>{hs} – {as_}<br><span style='font-size:0.65rem;'>{sl}</span></div>"
+            else:
+                bg         = "rgba(255,255,255,0.03)"
+                border     = "1px solid rgba(255,255,255,0.06)"
+                time_color = "#7a8fa6"
+                score_html = "<div style='text-align:center;min-width:64px;color:#555;font-size:0.85rem;font-weight:600;'>vs</div>"
+
+            st.markdown(f"""
+            <div style="display:flex;align-items:center;padding:10px 14px;border-radius:8px;
+                        margin-bottom:5px;background:{bg};border:{border};">
+                <div style="width:46px;color:{time_color};font-size:0.8rem;font-weight:600;flex-shrink:0;">{f.get('time','')}</div>
+                <div style="width:115px;color:#aaa;font-size:0.78rem;flex-shrink:0;">{f.get('flag','')} {f.get('league','')}</div>
+                <div style="flex:1;font-weight:600;font-size:0.85rem;">
+                    {f.get('home','')} <span style="color:#7ecf9e;font-size:0.72rem;">({f.get('homeWinPct','?')}%)</span>
+                </div>
+                {score_html}
+                <div style="flex:1;font-weight:600;font-size:0.85rem;text-align:right;">
+                    <span style="color:#aaa;font-size:0.72rem;">({f.get('awayWinPct','?')}%)</span> {f.get('away','')}
+                </div>
+            </div>""", unsafe_allow_html=True)
+
+# ════════════════════════ TAB 3 — MATCH CHAT ════════════════════════════════
 with tab_chat:
     st.markdown("""
     <div style="font-family:'Bebas Neue',sans-serif;font-size:1.8rem;letter-spacing:2px;
@@ -1179,7 +1125,7 @@ with tab_chat:
                 st.session_state.chat_history = []
                 st.rerun()
 
-# ════════════════════════ TAB 3 — BET TRACKER ════════════════════════════════
+# ════════════════════════ TAB 4 — BET TRACKER ════════════════════════════════
 with tab_tracker:
     st.markdown("""
     <div style="font-family:'Bebas Neue',sans-serif;font-size:1.8rem;letter-spacing:2px;
@@ -1193,7 +1139,7 @@ with tab_tracker:
     col_refresh, col_info = st.columns([1, 4])
     with col_refresh:
         if st.button("🔄 Check Results Now"):
-            with st.spinner("Checking ESPN for final scores..."):
+            with st.spinner("Checking API-Football for final scores..."):
                 updated_bets, n = auto_check_pending_bets(st.session_state.saved_bets)
                 st.session_state.saved_bets = updated_bets
                 save_bets_to_disk(updated_bets)
