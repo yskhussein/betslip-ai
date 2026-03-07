@@ -77,10 +77,22 @@ AF_BASE = "https://v3.football.api-sports.io"
 
 def af_headers():
     """Return API-Football auth headers from Streamlit secrets."""
-    try:
-        key = st.secrets.get("API_FOOTBALL_KEY", "")
-    except:
-        key = ""
+    key = ""
+    # Try all common naming variants
+    for name in ["API_FOOTBALL_KEY", "api_football_key", "API_FOOTBALL", "APIFOOTBALL_KEY"]:
+        try:
+            val = st.secrets.get(name, "")
+            if val:
+                key = val
+                break
+        except Exception:
+            pass
+    if not key:
+        try:
+            # Try bracket access as last resort
+            key = st.secrets["API_FOOTBALL_KEY"]
+        except Exception:
+            pass
     return {"x-apisports-key": key}
 
 def af_get(endpoint, params):
@@ -709,6 +721,17 @@ with st.sidebar:
         st.session_state["auto_date"] = next_sat
         st.rerun()
     st.markdown("<hr style='border-color:rgba(255,255,255,0.08);'>", unsafe_allow_html=True)
+    # Show API-Football key status
+    _af_key_found = any(
+        bool(st.secrets.get(n, "")) 
+        for n in ["API_FOOTBALL_KEY","api_football_key","API_FOOTBALL","APIFOOTBALL_KEY"]
+        if True
+    )
+    if _af_key_found:
+        st.success("✅ API-Football key ready")
+    else:
+        st.error("❌ API_FOOTBALL_KEY not found in Secrets")
+
     # Show API-Football error if any
     af_err = st.session_state.get("af_error", "")
     if af_err:
