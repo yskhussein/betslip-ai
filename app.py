@@ -76,31 +76,39 @@ AF_LEAGUE_IDS = {
 AF_BASE = "https://v3.football.api-sports.io"
 
 def af_headers():
-    """Return API-Football auth headers — session state override takes priority."""
+    """Return API-Football auth headers."""
+    # Always dump secret keys for debug
+    try:
+        st.session_state["af_secret_keys"] = str(list(st.secrets.keys()))
+    except Exception as e:
+        st.session_state["af_secret_keys"] = f"error: {e}"
+
+    # 1. Manual input in sidebar takes priority
     key = st.session_state.get("af_key_override", "")
+
+    # 2. Try every possible secrets access pattern
     if not key:
-        # Try flat key names
+        attempts = {}
         for name in ["API_FOOTBALL_KEY","api_football_key","API_FOOTBALL","APIFOOTBALL_KEY"]:
             try:
-                val = st.secrets.get(name, "")
-                if val: key = val; break
-            except Exception:
-                pass
-        # Try nested under common section names
-        if not key:
-            for section in ["general","keys","api","football"]:
-                for name in ["API_FOOTBALL_KEY","api_football_key","API_FOOTBALL"]:
-                    try:
-                        val = st.secrets[section][name]
-                        if val: key = val; break
-                    except Exception:
-                        pass
-                if key: break
-        # Store all top-level secret key names for debug
-        try:
-            st.session_state["af_secret_keys"] = str(list(st.secrets.keys()))
-        except Exception:
-            pass
+                v = st.secrets[name]
+                if v: key = v; break
+            except Exception as e:
+                attempts[name] = str(e)
+        st.session_state["af_attempts"] = str(attempts)
+
+    # 3. Try nested sections
+    if not key:
+        for section in ["general","keys","api","football","default"]:
+            for name in ["API_FOOTBALL_KEY","api_football_key","API_FOOTBALL"]:
+                try:
+                    v = st.secrets[section][name]
+                    if v: key = v; break
+                except Exception:
+                    pass
+            if key: break
+
+    st.session_state["af_key_found"] = bool(key)
     return {"x-apisports-key": key}
 
 def af_get(endpoint, params):
@@ -825,8 +833,9 @@ if generate_btn:
             st.error(f"❌ No fixtures found for {date_str}.")
             if debug_info:
                 st.caption(f"🔍 Debug — {debug_info}")
-            st.caption(f"🗝️ Secret keys found: {st.session_state.get('af_secret_keys', 'unknown — key lookup not triggered yet')}")
-            st.info("💡 Check: Is `API_FOOTBALL_KEY` set correctly in Streamlit Secrets? Is today's date selected (March 8 fixtures should be available)?")
+            st.caption(f"🗝️ Secret keys: {st.session_state.get('af_secret_keys','?')}")
+            st.caption(f"🔐 Key found: {st.session_state.get('af_key_found','?')} | Access attempts: {st.session_state.get('af_attempts','?')}")
+            st.info("💡 Share the debug lines above so we can fix the key issue.")
         else:
             st.info(f"✅ {len(live_fixtures)} real matches loaded for {date_str}")
             slips = []
