@@ -76,23 +76,15 @@ AF_LEAGUE_IDS = {
 AF_BASE = "https://v3.football.api-sports.io"
 
 def af_headers():
-    """Return API-Football auth headers from Streamlit secrets."""
-    key = ""
-    # Try all common naming variants
-    for name in ["API_FOOTBALL_KEY", "api_football_key", "API_FOOTBALL", "APIFOOTBALL_KEY"]:
-        try:
-            val = st.secrets.get(name, "")
-            if val:
-                key = val
-                break
-        except Exception:
-            pass
+    """Return API-Football auth headers — session state override takes priority."""
+    key = st.session_state.get("af_key_override", "")
     if not key:
-        try:
-            # Try bracket access as last resort
-            key = st.secrets["API_FOOTBALL_KEY"]
-        except Exception:
-            pass
+        for name in ["API_FOOTBALL_KEY","api_football_key","API_FOOTBALL","APIFOOTBALL_KEY"]:
+            try:
+                val = st.secrets.get(name, "")
+                if val: key = val; break
+            except Exception:
+                pass
     return {"x-apisports-key": key}
 
 def af_get(endpoint, params):
@@ -686,11 +678,36 @@ with st.sidebar:
     except:
         secret_key = ""
     if secret_key:
-        st.success("✅ API key ready")
+        st.success("✅ Claude key ready")
         api_key = secret_key
     else:
-        st.markdown("**🔑 API Key**")
+        st.markdown("**🔑 Claude API Key**")
         api_key = st.text_input("API Key", type="password", placeholder="sk-ant-...", label_visibility="collapsed")
+
+    # API-Football key — try secrets first, fall back to manual input
+    _af_secret = ""
+    for _n in ["API_FOOTBALL_KEY","api_football_key","API_FOOTBALL","APIFOOTBALL_KEY"]:
+        try:
+            _v = st.secrets.get(_n, "")
+            if _v: _af_secret = _v; break
+        except: pass
+    if not _af_secret:
+        try: _af_secret = st.secrets["API_FOOTBALL_KEY"]
+        except: pass
+
+    if _af_secret:
+        st.success("✅ API-Football key ready")
+        st.session_state["af_key_override"] = _af_secret
+    else:
+        st.markdown("**🏈 API-Football Key**")
+        _af_manual = st.text_input("API-Football Key", type="password",
+                                    placeholder="paste key here...", label_visibility="collapsed",
+                                    key="af_manual_key")
+        if _af_manual:
+            st.session_state["af_key_override"] = _af_manual
+            st.success("✅ API-Football key entered")
+        else:
+            st.warning("⚠️ API-Football key missing")
 
     st.markdown("<hr style='border-color:rgba(255,255,255,0.08);'>", unsafe_allow_html=True)
     st.markdown("**📅 Match Date**")
@@ -721,17 +738,6 @@ with st.sidebar:
         st.session_state["auto_date"] = next_sat
         st.rerun()
     st.markdown("<hr style='border-color:rgba(255,255,255,0.08);'>", unsafe_allow_html=True)
-    # Show API-Football key status
-    _af_key_found = any(
-        bool(st.secrets.get(n, "")) 
-        for n in ["API_FOOTBALL_KEY","api_football_key","API_FOOTBALL","APIFOOTBALL_KEY"]
-        if True
-    )
-    if _af_key_found:
-        st.success("✅ API-Football key ready")
-    else:
-        st.error("❌ API_FOOTBALL_KEY not found in Secrets")
-
     # Show API-Football error if any
     af_err = st.session_state.get("af_error", "")
     if af_err:
