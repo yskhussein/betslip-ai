@@ -92,18 +92,28 @@ def af_get(endpoint, params):
             params=params,
             timeout=10
         )
-        if r.status_code == 200:
-            data = r.json()
-            # Surface API-level errors (e.g. invalid key, quota exceeded)
-            errors = data.get("errors", {})
-            if errors:
-                st.session_state["af_error"] = str(errors)
-            return data.get("response", [])
+        raw = r.json() if r.status_code == 200 else {}
+        errors = raw.get("errors", {})
+        if errors:
+            st.session_state["af_error"] = f"HTTP {r.status_code} · {errors}"
+        if r.status_code != 200:
+            st.session_state["af_error"] = f"HTTP {r.status_code} from API-Football"
+            return []
+        resp = raw.get("response", [])
+        # Debug: store last call info
+        st.session_state["af_last"] = {
+            "endpoint": endpoint,
+            "params": str(params),
+            "status": r.status_code,
+            "results": raw.get("results", len(resp)),
+            "errors": str(errors),
+            "quota_used": r.headers.get("x-ratelimit-requests-remaining","?"),
+        }
+        return resp
     except Exception as e:
         st.session_state["af_error"] = str(e)
     return []
 
-@st.cache_data(ttl=300, show_spinner=False)   # cache 5 min per date+leagues combo
 def get_fixtures_for_date(target_date, leagues):
     """
     Fetch real fixtures from API-Football for the given date and leagues.
@@ -739,11 +749,38 @@ if generate_btn:
         date_str  = match_date.strftime("%A %d %B %Y")
         date_iso  = match_date.strftime("%Y-%m-%d")
 
-        with st.spinner("📡 Fetching real fixtures..."):
-            live_fixtures = get_fixtures_for_date(match_date, selected_leagues)
+        # Check session cache first (5 min TTL)
+        cache_key = f"fix_{date_iso}_{','.join(sorted(selected_leagues))}"
+        cached = st.session_state.get("fix_cache", {}).get(cache_key)
+        if cached and (datetime.datetime.now() - cached["ts"]).seconds < 300:
+            live_fixtures = cached["data"]
+            st.info(f"⚡ {len(live_fixtures)} fixtures loaded from cache")
+        else:
+            with st.spinner("📡 Fetching fixtures from API-Football..."):
+                live_fixtures = get_fixtures_for_date(match_date, selected_leagues)
+            if live_fixtures:
+                if "fix_cache" not in st.session_state:
+                    st.session_state["fix_cache"] = {}
+                st.session_state["fix_cache"][cache_key] = {
+                    "data": live_fixtures, "ts": datetime.datetime.now()
+                }
 
+        # Show debug info if API returned nothing
         if not live_fixtures:
-            st.error(f"❌ No fixtures found for {date_str}. Try a different date — fixtures are only available a few days ahead.")
+            af_last = st.session_state.get("af_last", {})
+            af_err  = st.session_state.get("af_error", "")
+            debug_info = ""
+            if af_last:
+                debug_info = (f"Last call: `{af_last.get('endpoint')}` | "
+                              f"Results: {af_last.get('results')} | "
+                              f"Quota remaining: {af_last.get('quota_used')} | "
+                              f"Errors: {af_last.get('errors')}")
+            if af_err:
+                st.error(f"🔑 API-Football error: {af_err}")
+            st.error(f"❌ No fixtures found for {date_str}.")
+            if debug_info:
+                st.caption(f"🔍 Debug — {debug_info}")
+            st.info("💡 Check: Is `API_FOOTBALL_KEY` set correctly in Streamlit Secrets? Is today's date selected (March 8 fixtures should be available)?")
         else:
             st.info(f"✅ {len(live_fixtures)} real matches loaded for {date_str}")
             slips = []
@@ -991,21 +1028,40 @@ with tab_fixtures:
 
     # Use fixtures from session if available, otherwise fetch fresh
     fix_date = match_date
+    fix_label = fix_date.strftime("%A %d %B %Y")
     if st.session_state.result and st.session_state.result.get("fixtures"):
         all_fix = st.session_state.result["fixtures"]
-        fix_label = st.session_state.result.get("date", fix_date.strftime("%A %d %B %Y"))
+        fix_label = st.session_state.result.get("date", fix_label)
     else:
-        with st.spinner("📡 Loading fixtures..."):
-            all_fix = get_fixtures_for_date(fix_date, list(LEAGUES.keys()))
-        fix_label = fix_date.strftime("%A %d %B %Y")
+        # Check session cache
+        fix_cache_key = f"fix_{fix_date.strftime('%Y-%m-%d')}_{','.join(sorted(LEAGUES.keys()))}"
+        cached_fix = st.session_state.get("fix_cache", {}).get(fix_cache_key)
+        if cached_fix and (datetime.datetime.now() - cached_fix["ts"]).seconds < 300:
+            all_fix = cached_fix["data"]
+        else:
+            with st.spinner("📡 Loading fixtures from API-Football..."):
+                all_fix = get_fixtures_for_date(fix_date, list(LEAGUES.keys()))
+            if all_fix:
+                if "fix_cache" not in st.session_state:
+                    st.session_state["fix_cache"] = {}
+                st.session_state["fix_cache"][fix_cache_key] = {
+                    "data": all_fix, "ts": datetime.datetime.now()
+                }
 
     if not all_fix:
+        af_err  = st.session_state.get("af_error", "")
+        af_last = st.session_state.get("af_last", {})
         st.markdown("""
         <div style="text-align:center;padding:40px 20px;">
             <div style="font-size:3rem;">📅</div>
             <div style="font-family:'Bebas Neue',sans-serif;font-size:1.2rem;letter-spacing:2px;color:#3d5a40;margin-top:8px;">NO FIXTURES FOUND</div>
-            <div style="color:#7a8fa6;font-size:0.86rem;margin-top:6px;">Try selecting a different date or generate slips first.</div>
+            <div style="color:#7a8fa6;font-size:0.86rem;margin-top:6px;">Try selecting a different date.</div>
         </div>""", unsafe_allow_html=True)
+        if af_err:
+            st.error(f"🔑 API-Football: {af_err}")
+        if af_last:
+            st.caption(f"🔍 Debug — endpoint: `{af_last.get('endpoint')}` | results: {af_last.get('results')} | quota left: {af_last.get('quota_used')} | errors: {af_last.get('errors')}")
+        st.info("💡 Make sure `API_FOOTBALL_KEY` is set in Streamlit Secrets → App settings → Secrets")
     else:
         st.markdown(f"<div style='color:#7a8fa6;font-size:0.84rem;margin-bottom:10px;'>📅 {fix_label} · {len(all_fix)} matches</div>", unsafe_allow_html=True)
 
