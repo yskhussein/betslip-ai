@@ -79,12 +79,28 @@ def af_headers():
     """Return API-Football auth headers — session state override takes priority."""
     key = st.session_state.get("af_key_override", "")
     if not key:
+        # Try flat key names
         for name in ["API_FOOTBALL_KEY","api_football_key","API_FOOTBALL","APIFOOTBALL_KEY"]:
             try:
                 val = st.secrets.get(name, "")
                 if val: key = val; break
             except Exception:
                 pass
+        # Try nested under common section names
+        if not key:
+            for section in ["general","keys","api","football"]:
+                for name in ["API_FOOTBALL_KEY","api_football_key","API_FOOTBALL"]:
+                    try:
+                        val = st.secrets[section][name]
+                        if val: key = val; break
+                    except Exception:
+                        pass
+                if key: break
+        # Store all top-level secret key names for debug
+        try:
+            st.session_state["af_secret_keys"] = str(list(st.secrets.keys()))
+        except Exception:
+            pass
     return {"x-apisports-key": key}
 
 def af_get(endpoint, params):
@@ -809,6 +825,7 @@ if generate_btn:
             st.error(f"❌ No fixtures found for {date_str}.")
             if debug_info:
                 st.caption(f"🔍 Debug — {debug_info}")
+            st.caption(f"🗝️ Secret keys found: {st.session_state.get('af_secret_keys', 'unknown — key lookup not triggered yet')}")
             st.info("💡 Check: Is `API_FOOTBALL_KEY` set correctly in Streamlit Secrets? Is today's date selected (March 8 fixtures should be available)?")
         else:
             st.info(f"✅ {len(live_fixtures)} real matches loaded for {date_str}")
@@ -1090,6 +1107,7 @@ with tab_fixtures:
             st.error(f"🔑 API-Football: {af_err}")
         if af_last:
             st.caption(f"🔍 Debug — endpoint: `{af_last.get('endpoint')}` | results: {af_last.get('results')} | quota left: {af_last.get('quota_used')} | errors: {af_last.get('errors')}")
+            st.caption(f"🗝️ Secret keys found: {st.session_state.get('af_secret_keys', 'none')}")
         st.info("💡 Make sure `API_FOOTBALL_KEY` is set in Streamlit Secrets → App settings → Secrets")
     else:
         st.markdown(f"<div style='color:#7a8fa6;font-size:0.84rem;margin-bottom:10px;'>📅 {fix_label} · {len(all_fix)} matches</div>", unsafe_allow_html=True)
