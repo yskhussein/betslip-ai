@@ -67,209 +67,150 @@ SLIP_ACCENTS = {
 FLAG_MAP   = {"bundesliga":"🇩🇪","la_liga":"🇪🇸","serie_a":"🇮🇹","ligue_1":"🇫🇷","epl":"🏴","champions_league":"🏆","eredivisie":"🇳🇱"}
 LABEL_MAP  = {"bundesliga":"Bundesliga","la_liga":"La Liga","serie_a":"Serie A","ligue_1":"Ligue 1","epl":"Premier League","champions_league":"Champions League","eredivisie":"Eredivisie"}
 
-# ── API-Football league IDs ───────────────────────────────────────────────────
-AF_LEAGUE_IDS = {
-    "bundesliga": 78, "la_liga": 140, "serie_a": 135,
-    "ligue_1": 61,   "epl": 39,       "champions_league": 2,
-    "eredivisie": 88,
+# ── Football-Data.org competition codes ──────────────────────────────────────
+FD_BASE = "https://api.football-data.org/v4"
+FD_LEAGUES = {
+    "bundesliga":       "BL1",
+    "la_liga":          "PD",
+    "serie_a":          "SA",
+    "ligue_1":          "FL1",
+    "epl":              "PL",
+    "champions_league": "CL",
+    "eredivisie":       "DED",
 }
-AF_BASE = "https://v3.football.api-sports.io"
 
-def af_headers():
-    """Return API-Football auth headers."""
-    # Priority 1: manual key entered in sidebar
+def fd_headers():
+    """Return Football-Data.org auth headers."""
     key = st.session_state.get("af_key_override", "")
-
-    # Priority 2: try all secrets patterns
     if not key:
-        secret_keys = []
-        try:
-            secret_keys = list(st.secrets.keys())
-            st.session_state["af_secret_keys"] = str(secret_keys)
-        except Exception as e:
-            st.session_state["af_secret_keys"] = f"secrets error: {e}"
-
-        for name in ["API_FOOTBALL_KEY","api_football_key","API_FOOTBALL","APIFOOTBALL_KEY"]:
+        for name in ["FOOTBALL_DATA_KEY","football_data_key","FD_KEY",
+                     "API_FOOTBALL_KEY","RAPIDAPI_KEY"]:
             try:
                 v = st.secrets[name]
                 if v:
-                    key = str(v).strip()
+                    key = "".join(str(v).split())
                     break
             except Exception:
                 pass
-
-        # Try nested sections
-        if not key:
-            for section in secret_keys:
-                for name in ["API_FOOTBALL_KEY","api_football_key","API_FOOTBALL"]:
-                    try:
-                        v = st.secrets[section][name]
-                        if v:
-                            key = str(v).strip()
-                            break
-                    except Exception:
-                        pass
-                if key:
-                    break
-
-    st.session_state["af_key_found"] = bool(key)
-    st.session_state["af_key_len"] = len(key) if key else 0
+    key = "".join(key.split())
+    st.session_state["af_key_found"]   = bool(key)
+    st.session_state["af_key_len"]     = len(key)
     st.session_state["af_key_preview"] = (key[:8] + "...") if len(key) >= 8 else key
-    return {"x-apisports-key": key}
+    return {"X-Auth-Token": key}
 
-def af_get(endpoint, params):
-    """Make a single API-Football request, return response list or []."""
+def af_headers():
+    return fd_headers()
+
+def fd_get(path, params=None):
+    """GET from Football-Data.org, return parsed JSON or {}."""
     try:
-        hdrs = af_headers()
-        # Force clean string — remove any whitespace/newlines that could corrupt header
-        key = hdrs.get("x-apisports-key", "")
-        key = "".join(key.split())  # strip ALL whitespace including \n \r \t
-        hdrs = {"x-apisports-key": key}
         r = requests.get(
-            f"{AF_BASE}/{endpoint}",
-            headers=hdrs,
+            f"{FD_BASE}/{path}",
+            headers=fd_headers(),
             params=params,
-            timeout=10
+            timeout=12,
         )
-        raw = r.json() if r.status_code == 200 else {}
-        errors = raw.get("errors", {})
-        if errors:
-            st.session_state["af_error"] = f"HTTP {r.status_code} · {errors}"
-        if r.status_code != 200:
-            st.session_state["af_error"] = f"HTTP {r.status_code} from API-Football"
-            return []
-        resp = raw.get("response", [])
-        # Debug: store last call info
-        st.session_state["af_last"] = {
-            "endpoint": endpoint,
-            "params": str(params),
-            "status": r.status_code,
-            "results": raw.get("results", len(resp)),
-            "errors": str(errors),
-            "quota_used": r.headers.get("x-ratelimit-requests-remaining","?"),
-        }
-        return resp
+        quota = r.headers.get("X-Requests-Available-Minute", "?")
+        if r.status_code == 200:
+            st.session_state["af_error"] = ""
+            st.session_state["af_last"] = {
+                "endpoint": path,
+                "params": str(params),
+                "status": 200,
+                "results": "ok",
+                "errors": "",
+                "quota_used": quota,
+            }
+            return r.json()
+        else:
+            msg = r.json().get("message", r.text[:120]) if r.content else str(r.status_code)
+            st.session_state["af_error"] = f"HTTP {r.status_code} · {msg}"
+            return {}
     except Exception as e:
         st.session_state["af_error"] = str(e)
-    return []
+        return {}
 
 def get_fixtures_for_date(target_date, leagues):
     """
-    Fetch real fixtures from API-Football for the given date and leagues.
-    Strategy:
-      1. One request per league to /fixtures (date + league + season)
-      2. Batch all upcoming fixture IDs and fetch /predictions in one call each
-         (API-Football predictions endpoint only accepts one fixture at a time,
-          so we fetch in parallel-ish with a short sleep to respect rate limits)
+    Fetch fixtures from Football-Data.org for the given date and leagues.
+    Uses /matches endpoint with dateFrom/dateTo = same date.
     """
-    import time as _time
-
     date_iso = target_date.strftime("%Y-%m-%d")
-    # Season: Aug-Dec = current year, Jan-Jul = previous year
-    season   = target_date.year if target_date.month >= 7 else target_date.year - 1
 
-    FINISHED = {"FT","AET","PEN","AWD","WO"}
-    LIVE     = {"1H","HT","2H","ET","BT","P"}
+    FD_FINISHED = {"FINISHED"}
+    FD_LIVE     = {"IN_PLAY", "PAUSED", "LIVE"}
 
-    # ── Step 1: fetch fixtures for all leagues ──────────────────────────────
-    raw_fixtures = []   # list of (lid, fix_dict)
-    for lid in leagues:
-        league_id = AF_LEAGUE_IDS.get(lid)
-        if not league_id:
-            continue
-        data = af_get("fixtures", {
-            "league": league_id,
-            "season": season,
-            "date":   date_iso,
-        })
-        for fix in data:
-            raw_fixtures.append((lid, fix))
-
-    if not raw_fixtures:
+    # Collect competition codes for requested leagues
+    codes = [FD_LEAGUES[lid] for lid in leagues if lid in FD_LEAGUES]
+    if not codes:
         return []
 
-    # ── Step 2: fetch predictions for upcoming fixtures only ────────────────
-    # Build list of fixture IDs that are not yet started
-    pre_ids = []
-    for lid, fix in raw_fixtures:
-        f      = fix.get("fixture", {})
-        short  = f.get("status", {}).get("short", "NS")
-        fid    = f.get("id")
-        if short not in FINISHED and short not in LIVE and fid:
-            pre_ids.append(fid)
+    all_matches = []
+    for code in codes:
+        data = fd_get(f"competitions/{code}/matches", {
+            "dateFrom": date_iso,
+            "dateTo":   date_iso,
+        })
+        for m in data.get("matches", []):
+            all_matches.append((code, m))
 
-    # Fetch predictions (1 call per fixture — API limitation)
-    predictions = {}   # fixture_id -> (home_pct, away_pct, draw_pct)
-    for fid in pre_ids:
-        try:
-            pdata = af_get("predictions", {"fixture": fid})
-            if pdata:
-                pct  = pdata[0].get("predictions", {}).get("percent", {})
-                def _p(key, fallback=0):
-                    v = pct.get(key, f"{fallback}%")
-                    try: return int(str(v).replace("%","").strip())
-                    except: return fallback
-                predictions[fid] = (_p("home",50), _p("away",50), _p("draws",0))
-        except:
-            pass
-        _time.sleep(0.15)   # ~6-7 req/sec — well within free tier 10/min limit
+    if not all_matches:
+        return []
 
-    # ── Step 3: assemble final fixture list ────────────────────────────────
+    # Reverse-map code -> lid
+    code_to_lid = {v: k for k, v in FD_LEAGUES.items()}
+
     fixtures = []
-    for lid, fix in raw_fixtures:
-        f       = fix.get("fixture", {})
-        teams   = fix.get("teams", {})
-        goals   = fix.get("goals", {})
-        league_fix = fix.get("league", {})
-        status  = f.get("status", {})
-        short   = status.get("short", "NS")
-        elapsed = status.get("elapsed")
+    for code, m in all_matches:
+        lid = code_to_lid.get(code, code)
+        status = m.get("status", "SCHEDULED")
 
-        home_name  = teams.get("home", {}).get("name", "?")
-        away_name  = teams.get("away", {}).get("name", "?")
-        fixture_id = f.get("id")
-
-        if short in FINISHED:
+        if status in FD_FINISHED:
             state = "post"; completed = True
-        elif short in LIVE:
+        elif status in FD_LIVE:
             state = "in";   completed = False
         else:
             state = "pre";  completed = False
 
-        home_score = goals.get("home")
-        away_score = goals.get("away")
+        home_team  = m.get("homeTeam", {}).get("shortName") or m.get("homeTeam", {}).get("name", "?")
+        away_team  = m.get("awayTeam", {}).get("shortName") or m.get("awayTeam", {}).get("name", "?")
+        score      = m.get("score", {})
+        ft         = score.get("fullTime", {})
+        ht_score   = score.get("halfTime", {})
+        minute     = m.get("minute")
+
+        home_score = ft.get("home")
+        away_score = ft.get("away")
         hs  = str(home_score) if home_score is not None and state != "pre" else ""
         as_ = str(away_score) if away_score is not None and state != "pre" else ""
 
         if state == "post":
             status_label = "FT"
         elif state == "in":
-            status_label = f"🔴 {elapsed}'" if elapsed else "🔴 LIVE"
+            status_label = f"🔴 {minute}'" if minute else "🔴 LIVE"
         else:
             status_label = ""
 
-        date_str = f.get("date", "")
-        time_str = date_str[11:16] if len(date_str) > 15 else "TBC"
+        utc_date = m.get("utcDate", "")
+        time_str = utc_date[11:16] if len(utc_date) > 15 else "TBC"
 
-        if state == "pre" and fixture_id in predictions:
-            home_pct, away_pct, draw_pct = predictions[fixture_id]
-        else:
-            home_pct, away_pct, draw_pct = 50, 50, 0
+        # FD.org doesn't have predictions on free plan — use 50/50 defaults
+        home_pct, away_pct, draw_pct = 45, 30, 25
 
         if home_pct > away_pct:
-            best_bet = f"{home_name} WIN"
+            best_bet = f"{home_team} WIN"
         elif away_pct > home_pct:
-            best_bet = f"{away_name} WIN"
+            best_bet = f"{away_team} WIN"
         else:
             best_bet = "Draw possible"
 
         fixtures.append({
-            "fixture_id":   fixture_id,
+            "fixture_id":   m.get("id"),
             "time":         time_str,
             "league":       LABEL_MAP.get(lid, lid),
             "flag":         FLAG_MAP.get(lid, "🏆"),
-            "home":         home_name,
-            "away":         away_name,
+            "home":         home_team,
+            "away":         away_team,
             "homeWinPct":   home_pct,
             "awayWinPct":   away_pct,
             "drawPct":      draw_pct,
@@ -281,57 +222,11 @@ def get_fixtures_for_date(target_date, leagues):
             "status_label": status_label,
         })
 
+    # Sort: live first, then scheduled, then finished
+    order = {"in": 0, "pre": 1, "post": 2}
+    fixtures.sort(key=lambda x: (order.get(x["state"], 1), x["time"]))
     return fixtures
 
-
-# ── Claude API ────────────────────────────────────────────────────────────────
-SLIP_SYSTEM = """You must respond with ONLY a valid JSON object. No text before, no text after, no markdown fences.
-
-STRICT JSON RULES - failure to follow will break the app:
-- ALL string values MUST be in double quotes: "value" not value
-- estimatedOdds MUST be a quoted string: "20x-35x" not 20x or 6/1
-- risk MUST be one of these exact quoted strings: "Low", "Low-Medium", "Medium", "High"
-- riskColor MUST be one of: "green", "orange", "red"
-- legs MUST be a number: 5 not "5"
-- num MUST be a number: 1 not "1"
-- NO trailing commas
-- Start with { and end with }
-
-{"type":"","title":"","subtitle":"","estimatedOdds":"20x-35x","risk":"Low-Medium","riskColor":"green","legs":5,"selections":[{"num":1,"match":"","league":"","flag":"","selection":"","prob":"75%","reasoning":""}],"analysis":["",""]}
-
-CRITICAL: Only use the exact fixtures provided. Do NOT invent matches.
-- match field MUST be "Home vs Away" exactly as given in fixtures (HOME team first)
-- reasoning must be plain text only — NO html tags, NO < or > characters
-- analysis strings must be plain text only — NO html tags
-Reasoning max 6 words. Exactly 2 analysis strings. Exactly 5 legs."""
-
-INSANE_SYSTEM = """You must respond with ONLY a JSON object. No text before, no text after, no markdown.
-
-{"type":"insane","title":"🤪 THE INSANE SLIP","subtitle":"10 exotic legs — targeting 10,000x to 50,000x","estimatedOdds":"10000x-50000x","risk":"INSANE","riskColor":"red","legs":10,"selections":[{"num":1,"match":"","league":"","flag":"","selection":"","prob":"","odds_est":"","reasoning":""}],"analysis":["",""]}
-
-GOAL: Build a 10-leg accumulator targeting real odds of 10,000x to 50,000x.
-CRITICAL: Only use the exact fixtures provided. Do NOT invent matches.
-
-MARKET MIX — use ALL of these types across the 10 legs:
-1. Exact correct score (e.g. "Correct Score: 2-1") — these alone are 8-15x each
-2. Both Teams To Score + Over 2.5 goals combined (e.g. "BTTS & Over 2.5") — 2.5-3x each
-3. Away team win + BTTS (e.g. "Away Win & BTTS") — 5-8x each  
-4. Half-Time/Full-Time result (e.g. "HT/FT: Draw/Home") — 6-10x each
-5. Exact total goals (e.g. "Exactly 3 goals" or "Exactly 4 goals") — 6-10x each
-6. Win to nil / Clean sheet win (e.g. "Juventus Win to Nil") — only for 70%+ favourites — 3-5x each
-7. Player to score + team to win (e.g. "Lewandowski to score & team to win") — 4-6x each
-8. Over 3.5 goals in a high-scoring game — 3-4x each
-
-RULES:
-- Spread exotic markets — no more than 2 legs of the same market type
-- Mix high-confidence exotic with medium-confidence exotic
-- Each leg should contribute 3x-15x to the accumulator
-- prob field = estimated probability of this exact outcome as percentage
-- odds_est field = estimated decimal odds for this specific market (e.g. "8.0", "12.0")
-- reasoning = why this exotic market makes sense (max 8 words)
-- analysis[0] = estimated total combined odds calculation
-- analysis[1] = strategy note about the slip
-- Start response with { and end with }"""
 
 def parse_json_safe(text):
     import re
@@ -484,27 +379,22 @@ def fetch_completed_scores(date_str):
     except:
         return {}
     date_iso = dt.strftime("%Y-%m-%d")
-    season   = dt.year if dt.month >= 7 else dt.year - 1
     scores   = {}
-    finished = {"FT", "AET", "PEN", "AWD", "WO"}
 
-    for league_id in AF_LEAGUE_IDS.values():
+    for code in FD_LEAGUES.values():
         try:
-            data = af_get("fixtures", {
-                "league": league_id,
-                "season": season,
-                "date":   date_iso,
+            data = fd_get(f"competitions/{code}/matches", {
+                "dateFrom": date_iso,
+                "dateTo":   date_iso,
             })
-            for fix in data:
-                short = fix.get("fixture", {}).get("status", {}).get("short", "")
-                if short not in finished:
+            for m in data.get("matches", []):
+                if m.get("status") != "FINISHED":
                     continue
-                teams = fix.get("teams", {})
-                goals = fix.get("goals", {})
-                home_name  = teams.get("home", {}).get("name", "")
-                away_name  = teams.get("away", {}).get("name", "")
-                home_score = int(goals.get("home") or 0)
-                away_score = int(goals.get("away") or 0)
+                home_name  = m.get("homeTeam", {}).get("name", "")
+                away_name  = m.get("awayTeam", {}).get("name", "")
+                ft         = m.get("score", {}).get("fullTime", {})
+                home_score = int(ft.get("home") or 0)
+                away_score = int(ft.get("away") or 0)
                 key = f"{home_name.lower()}|{away_name.lower()}"
                 scores[key] = (home_score, away_score, home_name, away_name)
         except:
@@ -731,18 +621,42 @@ with st.sidebar:
         except: pass
 
     if _af_secret:
-        st.success("✅ API-Football key ready")
         st.session_state["af_key_override"] = _af_secret
-    else:
-        st.markdown("**🏈 API-Football Key**")
-        _af_manual = st.text_input("API-Football Key", type="password",
-                                    placeholder="paste key here...", label_visibility="collapsed",
+
+    # Always show manual input so user can override
+    _current = st.session_state.get("af_key_override", "")
+    if not _current:
+        st.markdown("**⚽ Football-Data.org Key**")
+        _af_manual = st.text_input("Football-Data Key", type="password",
+                                    placeholder="paste token here...", label_visibility="collapsed",
                                     key="af_manual_key")
         if _af_manual:
-            st.session_state["af_key_override"] = _af_manual
-            st.success("✅ API-Football key entered")
+            st.session_state["af_key_override"] = "".join(_af_manual.split())
+            st.rerun()
         else:
             st.warning("⚠️ API-Football key missing")
+    else:
+        # Test connection with /status endpoint
+        if st.button("🔌 Test API Connection", key="test_af"):
+            try:
+                _key = "".join(_current.split())
+                _r = requests.get(
+                    f"{FD_BASE}/competitions",
+                    headers={"X-Auth-Token": _key},
+                    timeout=8
+                )
+                _d = _r.json()
+                if _r.status_code == 200:
+                    count = len(_d.get("competitions", []))
+                    quota = _r.headers.get("X-Requests-Available-Minute", "?")
+                    st.success(f"✅ Connected! {count} competitions | {quota} req/min remaining")
+                else:
+                    _err = _r.json().get("message", str(_r.status_code))
+                    st.error(f"❌ {_err}")
+            except Exception as e:
+                st.error(f"❌ {e}")
+        else:
+            st.success("✅ API-Football key set")
 
     st.markdown("<hr style='border-color:rgba(255,255,255,0.08);'>", unsafe_allow_html=True)
     st.markdown("**📅 Match Date**")
