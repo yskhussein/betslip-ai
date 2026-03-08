@@ -228,6 +228,55 @@ def get_fixtures_for_date(target_date, leagues):
     return fixtures
 
 
+# ── Claude system prompts ─────────────────────────────────────────────────────
+SLIP_SYSTEM = """You must respond with ONLY a valid JSON object. No text before, no text after, no markdown fences.
+
+STRICT JSON RULES - failure to follow will break the app:
+- ALL string values MUST be in double quotes: "value" not value
+- estimatedOdds MUST be a quoted string: "20x-35x" not 20x or 6/1
+- risk MUST be one of these exact quoted strings: "Low", "Low-Medium", "Medium", "High"
+- riskColor MUST be one of: "green", "orange", "red"
+- legs MUST be a number: 5 not "5"
+- num MUST be a number: 1 not "1"
+- NO trailing commas
+- Start with { and end with }
+
+{"type":"","title":"","subtitle":"","estimatedOdds":"20x-35x","risk":"Low-Medium","riskColor":"green","legs":5,"selections":[{"num":1,"match":"","league":"","flag":"","selection":"","prob":"75%","reasoning":""}],"analysis":["",""]}
+
+CRITICAL: Only use the exact fixtures provided. Do NOT invent matches.
+- match field MUST be "Home vs Away" exactly as given in fixtures (HOME team first)
+- reasoning must be plain text only — NO html tags, NO < or > characters
+- analysis strings must be plain text only — NO html tags
+Reasoning max 6 words. Exactly 2 analysis strings. Exactly 5 legs."""
+
+INSANE_SYSTEM = """You must respond with ONLY a JSON object. No text before, no text after, no markdown.
+
+{"type":"insane","title":"🤪 THE INSANE SLIP","subtitle":"10 exotic legs — targeting 10,000x to 50,000x","estimatedOdds":"10000x-50000x","risk":"INSANE","riskColor":"red","legs":10,"selections":[{"num":1,"match":"","league":"","flag":"","selection":"","prob":"","odds_est":"","reasoning":""}],"analysis":["",""]}
+
+GOAL: Build a 10-leg accumulator targeting real odds of 10,000x to 50,000x.
+CRITICAL: Only use the exact fixtures provided. Do NOT invent matches.
+
+MARKET MIX — use ALL of these types across the 10 legs:
+1. Exact correct score (e.g. "Correct Score: 2-1") — these alone are 8-15x each
+2. Both Teams To Score + Over 2.5 goals combined (e.g. "BTTS & Over 2.5") — 2.5-3x each
+3. Away team win + BTTS (e.g. "Away Win & BTTS") — 5-8x each
+4. Half-Time/Full-Time result (e.g. "HT/FT: Draw/Home") — 6-10x each
+5. Exact total goals (e.g. "Exactly 3 goals" or "Exactly 4 goals") — 6-10x each
+6. Win to nil / Clean sheet win (e.g. "Juventus Win to Nil") — only for 70%+ favourites — 3-5x each
+7. Player to score + team to win (e.g. "Lewandowski to score & team to win") — 4-6x each
+8. Over 3.5 goals in a high-scoring game — 3-4x each
+
+RULES:
+- Spread exotic markets — no more than 2 legs of the same market type
+- Mix high-confidence exotic with medium-confidence exotic
+- Each leg should contribute 3x-15x to the accumulator
+- prob field = estimated probability of this exact outcome as percentage
+- odds_est field = estimated decimal odds for this specific market (e.g. "8.0", "12.0")
+- reasoning = why this exotic market makes sense (max 8 words)
+- analysis[0] = estimated total combined odds calculation
+- analysis[1] = strategy note about the slip
+- Start response with { and end with }"""
+
 def parse_json_safe(text):
     import re
     text = text.strip()
